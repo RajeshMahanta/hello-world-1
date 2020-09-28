@@ -2,6 +2,10 @@ import os
 import re
 from datetime import datetime, timedelta
 import boto3
+import json
+import dateutil
+from dateutil import parser
+from boto3 import ec2
 
 
 ACCOUNT_ID = '036801138568'
@@ -10,6 +14,7 @@ ACCOUNT_ID = '036801138568'
 def lambda_handler(event, context):
     ec2 = boto3.resource("ec2")
 
+    #### OLD UNUSED AMI DELETION ######
     # Gather AMIs and figure out which ones to delete
     my_images = ec2.images.filter(Owners=[ACCOUNT_ID],
     Filters=[
@@ -41,7 +46,7 @@ def lambda_handler(event, context):
             image.creation_date,
             "%Y-%m-%dT%H:%M:%S.000Z",
         )
-        if created_at > datetime.now() - timedelta(0):
+        if created_at > datetime.now() - timedelta(45):
             young_images.add(image.id)
             
             
@@ -54,11 +59,10 @@ def lambda_handler(event, context):
     ):
         print('Deregistering {} ({})'.format(image.name, image.id))
         image.deregister()
+        
+    ####SNAPSHOT DELETION######
 
-
-    # Delete unattached snapshots
-    print('Fetching image list')
-    images = [image.id for image in ec2.images.filter(Owners=[ACCOUNT_ID],
+    ebsAllSnapshots = ec2.snapshots.filter(OwnerIds=[ACCOUNT_ID],
     Filters=[
         {
             'Name': 'tag:BillingCostCenter',
@@ -72,31 +76,19 @@ def lambda_handler(event, context):
                 'test',
             ]
         },
-    ]
-    )
-    ]
-    print("AMIs after deregistration {}" .format(images))
-    print('Deleting snapshots.')
-    for snapshot in ec2.snapshots.filter(OwnerIds=[ACCOUNT_ID],
-    Filters=[
-        {
-            'Name': 'tag:BillingCostCenter',
-            'Values': [
-                '789123456',
-            ]
-        },
-        {
-            'Name': 'tag:Division',
-            'Values': [
-                'test',
-            ]
-        },
-    ]):
-        print('Checking {}'.format(snapshot.id))
-        r = re.match(r".*for (ami-.*) from.*", snapshot.description)
-        if r:
-            if r.groups()[0] not in images:
-                print('Deleting {}'.format(snapshot.id))
+    ])
+
+    #Get the 30 days old date
+    # timeLimit=datetime.datetime.now() - datetime.timedelta(days=0)
+    timeLimit = datetime.now() - timedelta(days=45)
+    print(timeLimit)
+    
+    for snapshot in ebsAllSnapshots:
+         
+        if snapshot.start_time.date() <= timeLimit.date():
+            try:
+                print('Deleting Snapshot {} ({}) ' .format(snapshot.id, snapshot.tags))
                 snapshot.delete()
-            elif r.groups()[0] in images:
-                print('Snapshots in use {}'.format(snapshot.id))
+            except:
+                # this section will have all snapshots which is created before retention  days
+                print('The Snapshot is less than retention period or is in use {} ({})' .format(snapshot.id, snapshot.tags))
